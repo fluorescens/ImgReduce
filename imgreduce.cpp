@@ -18,6 +18,8 @@ Produces two tables: A tripart hash:imageID table and a more complex table with 
 #include <time.h>
 #include <assert.h>
 #include <deque>
+#include "collect_minimap.h"
+#include "minimap.h"
 
 #include <windows.h>
 #include <tchar.h> 
@@ -30,11 +32,14 @@ Produces two tables: A tripart hash:imageID table and a more complex table with 
 
 
 // The one and only application object
-
 CWinApp theApp;
 
 const int DEBUG_MODE = 0; //global debug state. 1 for debug enabled. 
 
+void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int object_group, std::wstring object_name); 
+std::vector<std::vector<std::wstring>> extract_fpath_from_file(const std::wstring& sourcedat); 
+std::vector<std::wstring> extract_group_from_file(const std::vector<std::vector<std::wstring>>& master_vector); 
+std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vector<std::vector<std::wstring>>& master_vector); 
 
 int main()
 {
@@ -215,6 +220,44 @@ int main()
 					break;
 				}
 			}
+
+			//file loading variables.
+			std::vector<std::vector<std::wstring>> master_tokenize;
+			std::wstring master_filepath; //zero-zero is always the filepath to img folder. 
+			std::wstring chosen_packname; //1-0 always the name for the pack. 
+			std::vector<std::wstring> group_names;
+			std::vector<std::vector<std::wstring>> file_names;
+
+			switch (setup_state) {
+			case 0: {
+				//if the ending \ in the file path was not provided, append it. 
+				if (standalone_folder[standalone_folder.size() - 1] != '\\') {
+					standalone_folder += L"\\";
+				}
+				master_filepath = standalone_folder;
+				chosen_packname = standalone_name;
+				group_names.push_back(L"none");
+				//real-alias-group
+				for (int i = 0; i < direct_name_buffer.size(); ++i) {
+					std::vector<std::wstring> standalone_file_names;
+					standalone_file_names.push_back(direct_name_buffer[i]);
+					standalone_file_names.push_back(direct_name_buffer[i]);
+					standalone_file_names.push_back(L"0");
+					file_names.push_back(standalone_file_names);
+				}
+				break;
+			}
+			case 1:
+				//same data as above but the data comes from crunchypack file
+				master_tokenize = extract_fpath_from_file(source_data);
+				master_filepath = master_tokenize[0][0];
+				chosen_packname = master_tokenize[1][0];
+				group_names = extract_group_from_file(master_tokenize);
+				file_names = extract_filedata_from_file(master_tokenize);
+				break;
+			}
+
+
         }
     }
     else
@@ -224,4 +267,247 @@ int main()
     }
 
     return nRetCode;
+}
+
+
+
+/*
+FUNCTION PURPOSE: 
+Opens and reads the bitmaps in the directory or named in the Crunchypack setup.
+Removes duplicate pixels WITHIN an image, so only the pixels unique to the image are submitted for hash processing and global-unique candidates
+This helps keep the running memory footprint of the object low (no larger than the biggest bitmap at any given time for this stage plus size of all minimap sources) 
+*/
+void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int object_group, std::wstring object_name) {
+
+	HBITMAP hbmScreen = NULL;
+	BITMAP bmpScreen;
+	HDC hdcWindow;
+	hbmScreen = (HBITMAP)LoadImage(NULL, filename, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+	if (!hbmScreen)
+	{
+		MessageBox(NULL, L"Failed to acquire bitmap. Program aborted.", L"Error 0x02", MB_OK);
+		std::abort();
+	}
+	else {
+		//MessageBox(NULL, L"Successful acquisition", L"Success", MB_OK);
+	}
+
+
+	GetObject(hbmScreen, sizeof(BITMAP), &bmpScreen); //get bitmap object dimensions for buffer calculations
+	DWORD dwBmpSize = bmpScreen.bmWidth * 4 * bmpScreen.bmHeight;
+	HANDLE hDIB = GlobalAlloc(GHND, dwBmpSize);
+	BYTE* lpbitmap = (BYTE *)GlobalLock(hDIB);
+	if (lpbitmap == NULL) {
+		//abort the program. Failure to acquire memory in an unrecoverable error. 
+		MessageBox(NULL, L"Failed to allocate bitmap memory. Program aborted.", L"Error 0x03", MB_OK);
+		std::abort();
+	}
+	GetBitmapBits(hbmScreen, dwBmpSize, lpbitmap);
+	//handle to bitmap, size of buffer, pointer to buffer. So we just need to size the buffer.. 
+	if (DEBUG_MODE == 1) {
+		//number of bytes allocated in RAM to the image self-hashing stage. 
+		std::wcout << "Allocated bytes: " << (int)dwBmpSize << '\n';
+	}
+
+
+
+
+	//hashing system, image-with-self
+	std::unordered_map<int, BOOL> Rreduction;
+	std::unordered_map<int, BOOL> Greduction;
+	std::unordered_map<int, BOOL> Breduction;
+	std::vector<int> uniqueplx;
+	int threepoint = 0;
+	for (int i = 0; i < (dwBmpSize / 4); i += 4) {
+		//iterates through every pixel and finds all the unique pixels within the image
+		threepoint = 0;
+		//find redunique
+		if (Rreduction.find((int)lpbitmap[i + 2]) == Rreduction.end()) {
+			//not in the map already
+			//std::cout << " " << i << ":" << (int)lpbitmap[i] << "R "; 
+			Rreduction[(int)lpbitmap[i + 2]] = true;
+			++threepoint;
+		}
+		else {
+			//found such an R key
+		}
+
+		if (Greduction.find((int)lpbitmap[i + 1]) == Greduction.end()) {
+			//not in the map already
+			//std::cout << " " << (i+1) << ":" << (int)lpbitmap[i + 1] << "G ";
+			Greduction[(int)lpbitmap[i + 1]] = true;
+			++threepoint;
+		}
+		else {
+			//found such an G key
+		}
+
+		if (Breduction.find((int)lpbitmap[i]) == Breduction.end()) {
+			//not in the map already
+			//std::cout << " " << (i + 2) << ":" << (int)lpbitmap[i + 2] << "B " << '\n';
+			Breduction[(int)lpbitmap[i]] = true;
+			++threepoint;
+		}
+		else {
+			//found such an B key
+		}
+
+
+
+		if (threepoint >= 1) {
+			uniqueplx.push_back(i); //pushes back the pixel location within the full bmap
+		}
+		else {
+			//the tripart structure is not unique.
+		}
+	}
+
+
+
+
+
+
+	std::vector<int>::const_iterator inter_vec;
+	if (DEBUG_MODE == 1) {
+		std::wcout << "Unique pixel within large array: " << '\n';
+		for (inter_vec = uniqueplx.begin(); inter_vec != uniqueplx.end(); ++inter_vec) {
+			std::wcout << (int)lpbitmap[(*inter_vec)] << " " << (int)lpbitmap[(*inter_vec + 1)] << " " << (int)lpbitmap[(*inter_vec + 2)] << " " << (int)lpbitmap[(*inter_vec + 3)];
+			std::wcout << '\n';
+		}
+	}
+
+	//reduce the bitmap buffer to contain only the minimum uniques and return it. 
+	//reduce lpbitmap to unique-only; 
+	//newalloc something 
+
+	DWORD compact_bmap_size = 4 * uniqueplx.size();
+	//HANDLE h_compact_mem = GlobalAlloc(GHND, compact_bmap_size);
+	//BYTE* compact_bmap = (BYTE *)GlobalLock(h_compact_mem);
+	BYTE* compact_bmap = new BYTE[compact_bmap_size];
+	if (compact_bmap == NULL) {
+		MessageBox(NULL, L"System could not allocate sufficient memory. Program aborted.", L"Error 0x03", MB_OK);
+		std::abort();
+	}
+	int tk = 0;
+	for (inter_vec = uniqueplx.begin(); inter_vec != uniqueplx.end(); ++inter_vec) { //uniquepxl is the locations of all the 4-part unique structures
+																					 //copy the unique values into the new buffer pixel by pixel 
+		compact_bmap[tk] = (int)lpbitmap[(*inter_vec)];
+		compact_bmap[tk + 1] = (int)lpbitmap[(*inter_vec + 1)];
+		compact_bmap[tk + 2] = (int)lpbitmap[(*inter_vec + 2)];
+		compact_bmap[tk + 3] = (int)lpbitmap[(*inter_vec + 3)];
+		tk += 4;
+	}
+
+	if (DEBUG_MODE == 1) {
+		std::wcout << "Minimaps compact pixels: " << '\n';
+		for (int t = 0; t < compact_bmap_size; t += 4) {
+			std::cout << (int)compact_bmap[t] << " " << (int)compact_bmap[t + 1] << " " << (int)compact_bmap[t + 2] << " " << (int)compact_bmap[t + 3];
+			std::cout << '\n';
+		}
+	}
+
+	minimap_collection.add_map(compact_bmap, compact_bmap_size, object_group, object_name); //add the image-unique bmap array to the collection
+	GlobalFree(hDIB); //release the memory associated with the original large bitmap, no longer needed. 
+}
+
+
+
+
+/*
+Extracts the path to the bitmap source folder from the crunchypack setup file
+*/
+std::vector<std::vector<std::wstring>> extract_fpath_from_file(const std::wstring& sourcedat) {
+	//this file processes the produced file from the interface into usable components
+	//pre-tokenize the whole file
+	std::wstring substr;
+	int vec_load = 0;
+	const int vec_dynamic = 100; //add 5 more rows to the vector. 
+	std::vector<std::vector<std::wstring>> data_parse(100);
+	for (int i = 0; i < sourcedat.length(); ++i) {
+		if (sourcedat[i] == '\n') {
+			data_parse[vec_load].push_back(substr);
+			substr.clear();
+			++vec_load;
+			if (vec_load % vec_dynamic == 0) {
+				int resize_req = vec_load + vec_dynamic; //resize the vector to hold all components
+				data_parse.resize(resize_req);
+			}
+
+		}
+		else {
+			substr += sourcedat[i];
+		}
+	}
+
+	for (int i = 0; i < data_parse.size(); ++i) {
+		if (data_parse[i].empty() == true) {
+
+		}
+		else {
+			std::wcout << data_parse[i][0] << '\n';
+		}
+	}
+
+	//error checking. zero-zero should only every have one entry, as should name and groups. 
+	assert(data_parse[0].size() == 1);
+	assert(data_parse[1].size() == 1);
+	assert(data_parse[2].size() == 1);
+
+	return data_parse;
+}
+
+
+/*
+Extracts groups from the crunchypack setup file
+*/
+std::vector<std::wstring> extract_group_from_file(const std::vector<std::vector<std::wstring>>& master_vector) {
+	//this procudes a vector of group names, with the end of the vector always being the default "none"
+	const int defined_groups = 2;
+	std::vector<std::wstring> vector_gname;
+
+	std::wstring substr;
+	for (int i = 0; i < master_vector[defined_groups][0].length(); ++i) {
+		if (master_vector[defined_groups][0][i] == ',') {
+			vector_gname.push_back(substr);
+			substr.clear();
+		}
+		else {
+			substr += master_vector[defined_groups][0][i];
+		}
+	}
+
+	return vector_gname;
+}
+
+
+/*
+Extracts the image bitmap file names from the crunchypack setup file. 
+*/
+std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vector<std::vector<std::wstring>>& master_vector) {
+	//this procudes a vector of image real name (for location purposes), its alias string, and its group name. Used in minimap construction.
+	std::wstring extract_fname;
+	std::vector<std::vector<std::wstring>> vector_fname;
+	vector_fname.resize(master_vector.size());
+	int linecounter = 0;
+	const int fdata_start = 3;
+	for (int i = fdata_start; i < master_vector.size(); ++i) {
+		if (master_vector[i].empty() == true) {
+			break; //vector capacity may exceed number of files due to dynamic resizing. But all files are guarenteed to be contiguous. 
+		}
+		std::wstring substr = master_vector[i][0]; //each master vector row contains one data line 
+		std::wstring subfile;
+		for (int k = 0; k < substr.length(); ++k) {
+			if (substr[k] == ',') {
+				vector_fname[linecounter].push_back(subfile);
+				subfile.clear();
+			}
+			else {
+				subfile += substr[k];
+			}
+		}
+		++linecounter;
+	}
+
+	vector_fname.resize(linecounter);
+	return vector_fname;
 }
