@@ -258,6 +258,51 @@ int main()
 			}
 
 
+			if (DEBUG_MODE == 1) {
+				std::wcout << "SRC: " << source_data << "\n\n";
+				std::wcout << "Groups: " << '\n';
+				for (int i = 0; i < group_names.size(); ++i) {
+					std::wcout << group_names[i] << " ";
+				}
+				std::cout << "\n\n";
+				std::cout << "File table" << '\n';
+				for (int i = 0; i < file_names.size(); ++i) {
+					for (int j = 0; j < file_names[i].size(); ++j) {
+						std::wcout << file_names[i][j] << " ";
+					}
+					std::wcout << '\n';
+				}
+			}
+			else {
+				std::wcout << "Processed the data file. Building workload." << std::endl;
+			}
+
+			collect_minimap& cmapref = collect_minimap(); //the one and only minimap collection manager object 
+
+			const int perfile_progress = (100 / file_names.size()) / 3;
+			int progress = 0;
+
+
+			for (int i = 0; i < file_names.size(); ++i) {
+				//stage one processing of image files
+				std::wstring wstr_to_file = master_filepath + file_names[i][0];
+				LPCWSTR path_to_file = wstr_to_file.c_str();
+				int group_property = std::stoi(file_names[i][2]);
+				std::wstring obj_alias = file_names[i][1];
+				std::wcout << path_to_file;
+				if (DEBUG_MODE == 1) {
+					std::wcout << "\n\n" << "Processing : " << file_names[i][0] << '\n';
+				}
+				LoadInitialImage(path_to_file, cmapref, group_property, obj_alias);
+				progress += perfile_progress;
+				std::wcout << "Progress: " << progress << "%" << '\n';
+			}
+
+
+
+
+
+
         }
     }
     else
