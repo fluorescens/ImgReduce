@@ -40,6 +40,8 @@ void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int
 std::vector<std::vector<std::wstring>> extract_fpath_from_file(const std::wstring& sourcedat); 
 std::vector<std::wstring> extract_group_from_file(const std::vector<std::vector<std::wstring>>& master_vector); 
 std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vector<std::vector<std::wstring>>& master_vector); 
+std::unordered_map<long int, int> delete_global_duplicates(collect_minimap&, std::vector<std::vector<int>>&, std::vector<std::vector<int>>& );
+void colission_removal_in_source(std::vector<std::vector<int>>&, std::vector<std::vector<int>>&, collect_minimap&);
 
 int main()
 {
@@ -298,7 +300,25 @@ int main()
 				std::wcout << "Progress: " << progress << "%" << '\n';
 			}
 
+			std::vector<std::vector<int>> gcollide_handling_firstocc; //arrays for holding multiple-colisson values, first colission
+			std::vector<std::vector<int>> gcollide_handling_secondocc; //second colission
+			std::unordered_map<long int, int> tripart_hashmap = delete_global_duplicates(cmapref, gcollide_handling_firstocc, gcollide_handling_secondocc);
+			for (std::unordered_map<long int, int>::const_iterator iter = tripart_hashmap.begin(); iter != tripart_hashmap.end(); ++iter) {
+				//produce the hashmap output. 
+				std::cout << "Value " << std::to_string((long int)iter->first) << " " << std::to_string(iter->second) << '\n';
+			}
+			colission_removal_in_source(gcollide_handling_firstocc, gcollide_handling_secondocc, cmapref);
 
+
+			//clear bad object names from source. 
+			std::vector<std::vector<std::wstring>> images_with_unique;
+
+			//Builds [Color, like 125 red, matches....] ObjectID1, ObjectID2...
+			//this is the table that will be sent
+			//Vector of 256 empty vectors, one per color. 
+			std::vector<std::vector<int>> redbucket(256, std::vector<int>(0)); //the BGR vectors
+			std::vector<std::vector<int>> greenbucket(256, std::vector<int>(0));
+			std::vector<std::vector<int>> bluebucket(256, std::vector<int>(0));
 
 
 
@@ -555,4 +575,167 @@ std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vec
 
 	vector_fname.resize(linecounter);
 	return vector_fname;
+}
+
+
+
+/*
+Builds a map of all unique tripart color objects using a rolling hash.
+Backtracks and marks single and multi collission points for deletion from the image minimap buffers.  
+*/
+std::unordered_map<long int, int> delete_global_duplicates(collect_minimap& cmapref, std::vector<std::vector<int>>& global_collide_handling_firstocc, std::vector<std::vector<int>>& global_collide_handling_secondocc) {
+	/*FUNCTION PURPOSE: Loads the vectors of colissions that need to be cleared by colission_removal_in_source
+	*/
+
+	//handle global duplicates by clearing from the participant object source arrays before the final RBG buckets are constructed 
+	global_collide_handling_firstocc.resize(cmapref.vec_size()); //has as many vectors as images
+																 //0: 4, 32 
+																 //FORMAT: Bucket: object, Pixel+1 = pixel collide
+																 //BUCKET collides with OBJECT at OBJECT_PIXEK(Y): Remove Y from both bucket and object
+
+	global_collide_handling_secondocc.resize(cmapref.vec_size());
+	//FORMAT: Bucket: Pixel
+	//PIXEL is a well-known colission point. Remove PIXEL from BUCKET
+
+
+	std::unordered_map<long int, int> tripart_obj; //each TRIPART pixel at this scale is uniquely owned. 
+	const int hash_badunique = cmapref.vec_size() + 1; //a value larger than the largest item ID that could exist used as a marker
+	for (int i = 0; i < cmapref.vec_size(); ++i) {
+		//request: the 4-part elements, need access to minimap source buffer
+		BYTE* dstart = cmapref.access_minimap_source(i);
+		int bufsize = cmapref.access_size_source(i); //number of pixels in object minimap
+		for (int y = 0; y < bufsize; y += 4) {
+			//rolling hash each BGR pixel, 1000000007 is a well known prime that eliminates collissions for this range
+			long int h1 = (dstart[y] * 257 + dstart[y + 1]) % 1000000007; //b-g	
+			long int h2 = (h1 * 257 + dstart[y + 2]) % 1000000007; //bg-r	
+			long int h3 = (h2 * 257 + dstart[y]) % 1000000007; //bgr-b		
+
+			if (tripart_obj.find(h3) == tripart_obj.end()) {
+				//object is currently unique
+				tripart_obj[h3] = i; //in the hash, the item ID is loaded as owning this hash of the pixel
+				if (DEBUG_MODE == 1) {
+					std::cout << "Add at" << std::to_string((long int)h3) << " " << std::to_string(i) << "(" << (int)dstart[y] << "," << (int)dstart[y + 1] << "," << (int)dstart[y + 2] << ")" << '\n';
+				}
+			}
+			else if (tripart_obj[h3] < hash_badunique) {
+				//the pixel was previously unique (objectID in range, < hash_badunique) but just got hit again
+				int remove_previous = tripart_obj[h3]; //the object at that hash was originally unique must have its source array cleared
+													   //need to find parent value as well. Must retrieve by searching
+				for (std::unordered_map<long int, int>::iterator iter = tripart_obj.begin(); iter != tripart_obj.end(); ++iter) {
+					if (iter->second == remove_previous) {
+						iter->second = hash_badunique;
+					}
+					else {
+
+					}
+				}
+				//index is the parent, i is the child, and y is the pixel in the child
+				//global[previously_owned_by] {collides with, at}
+				global_collide_handling_firstocc[remove_previous].push_back(i); //push back objectID
+				global_collide_handling_firstocc[remove_previous].push_back(y); //push back pixel
+				tripart_obj[h3] = hash_badunique; //mark this pixel as a multi-hit point now so on second clear we ONLY clear from child. 
+												  //Don't double-delete
+				std::cout << "WARNING: object first CL" << '\n';
+				if (DEBUG_MODE == 1) {
+					std::cout << "First order colission: Object " << remove_previous << " with Object " << i << '\n';
+				}
+			}
+			else {
+				//tripart is ea known multi-hit value
+				//do a simple clear since at this point, the parent has been cleared already
+				global_collide_handling_secondocc[i].push_back(y); //ObjectID: Pixel
+				std::cout << "WARNING: object bad CL" << '\n';
+				if (DEBUG_MODE == 1) {
+					std::cout << "Second order colission: Object " << i << '\n';
+				}
+			}
+		}
+	}
+
+	//loads collission key values into deque
+	std::deque<long int> clear_keys;
+	for (std::unordered_map<long int, int>::iterator iter = tripart_obj.begin(); iter != tripart_obj.end(); ++iter) {
+		if (iter->second == cmapref.vec_size() + 1) {
+			clear_keys.push_back(iter->first);
+		}
+		else {
+
+		}
+	}
+
+	//clear the colliding values from the global map. 
+	std::unordered_map<long int, int>::iterator map_iter;
+	for (std::deque<long int>::const_iterator iter = clear_keys.begin(); iter != clear_keys.end(); ++iter) {
+		map_iter = tripart_obj.find(*iter);
+		tripart_obj.erase(map_iter);
+	}
+	clear_keys.clear();
+
+	return tripart_obj;
+}
+
+
+/*
+Backtracks and deletes collission points out of participating minimap buffers.
+Reduces minimaps down to a collection of triparts that are unique among all all objects in the collection after execution.
+*/
+void colission_removal_in_source(std::vector<std::vector<int>>& global_collide_handling_firstocc, std::vector<std::vector<int>>& global_collide_handling_secondocc, collect_minimap& cmapref) {
+	//handles the global colission arrays and removes the conflict pixels from the object source. 
+	if (DEBUG_MODE == 1) {
+		std::cout << '\n' << "Collide handling: ";
+	}
+	std::vector<int>::const_iterator iter_source;
+	for (int j = 0; j < global_collide_handling_firstocc.size(); ++j) {
+		if (global_collide_handling_firstocc[j].empty()) {
+			//This object experieneced no colissions. Its source pixels are all unique. 
+		}
+		else {
+			for (iter_source = global_collide_handling_firstocc[j].begin(); iter_source != global_collide_handling_firstocc[j].end(); ++iter_source) {
+				//each one of these represents a colission
+				//first vector guarenteed to only ever have one child per tripart, then it'll be marked bad_hash and put into second vector
+				//[parent] child_obj, child_pixel
+				int parentobj = j;
+				int childobj = (*iter_source); //the vector in j
+				++iter_source;
+				int childpixel = (*iter_source);
+				std::cout << j << " " << childobj << " " << childpixel << '\n'; //
+
+				//remove from child, returning rbg, then BACKTRACK to delete from parent. 
+				//access the bmap source of child, navigate to the pixel, copy the RBG and then call delete on the pixel. 
+				BYTE* childsource = cmapref.access_minimap_source(childobj);
+				int oset = 0;
+				for (int i = 0; i < childpixel; ++i) {
+					oset += 4;
+				}
+
+				int redmatch = childsource[oset];
+				int greenmatch = childsource[oset + 1];
+				int bluematch = childsource[oset + 2];
+				cmapref.remove_ambiguous_pixel(childobj, childpixel); //remove child pixel from child. 
+
+				//Now to remove the parent, need to find the RBG of the parent using the colormatch temps above. 
+				BYTE* parentsource = cmapref.access_minimap_source(parentobj);
+				//first, we need to find where the pixel is...
+				int parent_pixel_start = 0;
+				for (int i = 0; i < cmapref.access_size_source(parentobj); i += 4) {
+					//find the rbg point and return the i, O(n) but very rarely executed: only once per first occurance collission. 
+					if (parentsource[i] == redmatch  &&  parentsource[i + 1] == greenmatch   &&   parentsource[i + 2] == bluematch) {
+						parent_pixel_start = i;
+						break;
+					}
+					else {
+						//no match. continue on. 
+					}
+				}
+				cmapref.remove_ambiguous_pixel(parentobj, parent_pixel_start); //remove the pixel from the parent as well. 
+			}
+		}
+	}
+
+	//iterates through parent array deleting [objectID] pixel. 
+	for (int i = 0; i < global_collide_handling_secondocc.size(); ++i) {
+		for (int m = 0; m < global_collide_handling_secondocc[i].size(); ++m) {
+			cmapref.remove_ambiguous_pixel(i, m); //calls a direct delete on second-colission BYTE arrays. Parent has already been handled in first-colission state. 
+		}
+	}
 }
