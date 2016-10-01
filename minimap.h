@@ -16,18 +16,19 @@ Also supports access to the buffer and will handle its own resizing if called to
 class minimap
 {
 public:
-	minimap::minimap(BYTE*, int, int, int, std::wstring);
+	minimap::minimap(int*, int, int, int, std::wstring);
 	std::string minimap::unit_data() const;
-	void minimap::remove_pixel(int remove);
-	void minimap::search_source_for_pxl(int red, int green, int blue);
+	void minimap::compact_map();
+	void minimap::mark_pixel(int mark);
 	int minimap::access_id() const;
 	~minimap();
+private:
 	int indiv_buffer_size; //the size of the minimaps BYTE buffer
 	int indiv_pix; //number of pixels in the BYTE buffer
 	int object_id; //added ID
 	int major_group; //the group ID number
 	std::wstring identifier; //the alias name of the object
-	BYTE* source; //pointer to the allocated source array
+	int* source; //pointer to the allocated source array
 	friend class collect_minimap;
 };
 

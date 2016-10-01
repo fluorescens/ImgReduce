@@ -1,6 +1,6 @@
 /*
 A general implementation of the image hashing algorithm used by Crunchypack. 
-Takes a collection of 256-bitmap images and reduces each image down to the pixels that are unique to the image among the set. 
+Takes a collection of 24-bitmap images and reduces each image down to the pixels that are unique to the image among the set. 
 Produces two tables: A tripart hash:imageID table and a more complex table with 256-rows and a list of objects that share that value for a given channel. 
 */
 
@@ -34,181 +34,174 @@ Produces two tables: A tripart hash:imageID table and a more complex table with 
 // The one and only application object
 CWinApp theApp;
 
-const int DEBUG_MODE = 0; //global debug state. 1 for debug enabled. 
+const int DEBUG_MODE = 1; //global debug state. 1 for debug enabled. 
 
-void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int object_group, std::wstring object_name); 
-std::vector<std::vector<std::wstring>> extract_fpath_from_file(const std::wstring& sourcedat); 
-std::vector<std::wstring> extract_group_from_file(const std::vector<std::vector<std::wstring>>& master_vector); 
-std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vector<std::vector<std::wstring>>& master_vector); 
-std::unordered_map<long int, int> delete_global_duplicates(collect_minimap&, std::vector<std::vector<int>>&, std::vector<std::vector<int>>& );
+/*
+Forward declarations list. Defined in definition. 
+*/
+std::vector<std::vector<std::wstring>> extract_fpath_from_file(const std::wstring&);
+std::vector<std::wstring> extract_group_from_file(const std::vector<std::vector<std::wstring>>&);
+std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vector<std::vector<std::wstring>>&);
+int pkg_table_to_file(const std::wstring&,
+	const std::vector<std::vector<int>>&,
+	const std::vector<std::vector<int>>&,
+	const std::vector<std::vector<int>>&,
+	const std::vector<std::wstring>&,
+	const std::vector<std::vector<std::wstring>>&);
+
+int pkg_map_to_file(std::unordered_map<long int, int>&,
+	const std::wstring&,
+	const std::vector<std::wstring>&,
+	const std::vector<std::vector<std::wstring>>&);
+
 void colission_removal_in_source(std::vector<std::vector<int>>&, std::vector<std::vector<int>>&, collect_minimap&);
 
 int main()
 {
-    int nRetCode = 0;
+	int nRetCode = 0;
+	HMODULE hModule = ::GetModuleHandle(nullptr);
+	if (hModule != nullptr)
+	{
+		// initialize MFC and print and error on failure
+		if (!AfxWinInit(hModule, nullptr, ::GetCommandLine(), 0))
+		{
+			wprintf(L"Fatal Error: MFC initialization failed\n");
+			nRetCode = 1;
+		}
+		else
+		{
+			collect_minimap cmapref; //the one and only minimap collection manager object 
 
-    HMODULE hModule = ::GetModuleHandle(nullptr);
 
-    if (hModule != nullptr)
-    {
-        // initialize MFC and print and error on failure
-        if (!AfxWinInit(hModule, nullptr, ::GetCommandLine(), 0))
-        {
-			wprintf(L"A fatal error: MFC initialization failed : has occured.\n");
-            nRetCode = 1;
-        }
-        else
-        {
-			std::wstring crunchy_path; //path to image folder containing bitmaps
-			std::wstringstream buffer; //for crunchypack data reading
-			std::wstring source_data; //stores stringstream buffer once read-in is complete
-			std::wstring setup_choice; //stand alone files or part of a prebuilt pack?
-			int setup_state = -1; //0: standalone, 1: prebuilt
-			std::vector<std::wstring> direct_name_buffer; //names of files in folder containing a '.bmp' extension
-			std::wstring standalone_folder; //the path to the folder from root
-			std::wstring standalone_name; //user-enetred name for the pack file
+			//set up initial selection dialogue
+			std::wstring crunchy_path; //path to image folder
+			std::wstringstream buffer; //read in crunchypack setup file, if chosen
+			std::wstring source_data; //string of crunchypack data
+			std::wstring setup_choice; //dialogue choice of standalone or prebuilt pack
+			int setup_state = -1; //initialize the state to not 0 or 1
+			std::vector<std::wstring> direct_name_buffer; //list of image file names from a standalone choice
+			std::wstring standalone_folder; //path to image folder
+			std::wstring standalone_name; //name of the file to be output
 			std::wcout << "Welcome to CrunchyPack Generator: IMGReduce 1.0!" << '\n';
-			std::wcout << "Please ensure all images are 256 bitmaps.\nThere are different types of bitmap(.bmp) formats and only 256 bitmaps should be used. \n"
-				<< "To check if a file is a 256 bitmap, right click the image, click properties and under the details tab check bit depth. \n"
-				<< "This value should be 8; a 4 or 24 are the wrong formats (16 and 24 bitmap). Resave the file in the correct format in a program like Paint. \n"
-				<< "If you sure are the images are in the correct format, proceed.\n\n";
+			std::wcout << "For screen adapter compatibility ensure all images are 24-bitmaps.\nThere are different types of bitmap(.bmp) formats and only 24-bitmaps should be used for this purpose. \n"
+				<< "To check if a file is a 24 bitmap, right click the image, click properties and under the details tab check bit depth. \n"
+				<< "This value should be 24; a 4 or 16 are not screen-compatible formats. Recrop and save the desired images from the source as 24-bitmaps. \n"
+				<< "This program ONLY accepts bitmap formats. If you sure are the images are in the correct format for your purpose, proceed.\n\n";
 			while (true) {
-				bool quit = false; //when quit true, exit the user loop
-
-				bool set_state = false; 
-				while (set_state == false) {
-					//choose the builder state: directly on a collection of images or as part of a prebuilt crunchypack file
-					if (setup_state != 0 || setup_state != 1) {
-						std::wcout << "Standalone images(i) or build from a crunchypack template(p)? (enter character):";
-						std::getline(std::wcin, setup_choice);
-						switch (setup_choice[0]) {
-						case('i') :
-							//standalone images
-							setup_state = 0;
-							set_state = true;
-							break;
-						case('p') :
-							//build from pack
-							setup_state = 1;
-							set_state = true; 
-							break;
-						default:
-							std::wcout << "No such option is available. Options include i or p" << '\n';
-							break; 
-						}
-					}
-				}
-
-
-				bool set_path = false; 
-				while (set_path == false) {
-					switch (setup_state) {
-						//standalone file needs location, 
-					case 0: {
-						std::wcout << "Enter full filepath from root to 256-bitmap containing folder: ";
-						if (DEBUG_MODE == 1) {
-							crunchy_path = L"C:\\Users\\JamesH\\Documents\\NetBeansProjects\\CleanStencilUI\\src\\cleanstencilui\\testfolder";
-						}
-						else {
-							std::getline(std::wcin, crunchy_path);
-						}
-						/*
-						Pack filename processing and exclusion would have been done by the java crunchypack setup.
-						Without that, file finding and verification must be done here.
-
-						Windows routine for extracting filenames from a folder. Automatically excludes any files NOT containing a .bmp extension. 
-						However, .bmp folders of the wrong bit depth may still be included. Need to open the file to check the header. 
-						*/
-						WIN32_FIND_DATA w32_data_finding;
-						LARGE_INTEGER filesize;
-						TCHAR szDir[MAX_PATH];
-						size_t length_of_arg;
-						HANDLE hFind = INVALID_HANDLE_VALUE;
-						DWORD dwError = 0;
-
-						STRSAFE_LPCWSTR crunchy_to_lpwstr = crunchy_path.c_str(); //convert file wstring to a LPCWSTR for windows methods. 
-
-						StringCchCopy(szDir, MAX_PATH, crunchy_to_lpwstr);
-						StringCchCat(szDir, MAX_PATH, TEXT("\\*"));
-
-
-						hFind = FindFirstFile(szDir, &w32_data_finding);
-
-						if (INVALID_HANDLE_VALUE == hFind)
-						{
-							std::wcout << "The program could not find that folder.\n";
-							continue;
-						}
-						else {
-							//the folder could be opened. Save the path. 
-							standalone_folder = crunchy_path;
-						}
-
-						do
-						{
-							//enumerate all files and folders inside the folder
-							if (w32_data_finding.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-							{
-
-							}
-							else
-							{
-								//add any file with the right extension to the name buffer vector
-								filesize.LowPart = w32_data_finding.nFileSizeLow;
-								filesize.HighPart = w32_data_finding.nFileSizeHigh;
-								std::wstring cmp = w32_data_finding.cFileName;
-								if (cmp.find(L".bmp") == std::wstring::npos) {
-									//file did not contain correct extension
-									std::wcout << " File " << w32_data_finding.cFileName << " is not a bitmap. Excluded from import." << '\n';
-								}
-								else {
-									//file is a .bmp
-									direct_name_buffer.push_back(w32_data_finding.cFileName);
-									//as a convenience, prints all included and excluded files to console
-									_tprintf(TEXT("  %s   %ld bytes\n"), w32_data_finding.cFileName, filesize.QuadPart);
-								}
-							}
-						} while (FindNextFile(hFind, &w32_data_finding) != 0);
-
-						FindClose(hFind); //close handle
-						set_path = true; 
-						quit = true;
+				bool quit = false;
+				if (setup_state != 0 || setup_state != 1) {
+					std::wcout << "Standalone images(i) or build from a crunchypack template(p)? (enter character):";
+					std::getline(std::wcin, setup_choice);
+					switch (setup_choice[0]) {
+					case('i'):
+						//standalone images
+						setup_state = 0;
 						break;
-					}
-					case 1: {
-						//build from crunchypack: already given a file location and filtered images in the crunchypack file itself
-						std::wcout << "Enter full path to crunchypack setup file, including name and extension: ";
-						if (DEBUG_MODE == 1) {
-							crunchy_path = L"C:\\Users\\JamesH\\Documents\\NetBeansProjects\\CleanStencilUI\\cpack_fpath_condense_spack.txt";
-						}
-						else {
-							std::getline(std::wcin, crunchy_path);
-						}
-						std::wifstream datafile(crunchy_path, std::ios::in);
-						if (!datafile.is_open()) {
-							std::wcout << "The program could not find the crunchypack setup file.\nRemember to include the full file name and .txt extension.";
-							continue;
-						}
-						else {
-							//read the file into a buffer and save the string for extraction. 
-							buffer << datafile.rdbuf();
-							source_data = buffer.str();
-							set_path = true;
-							quit = true;
-							datafile.close(); //close the file. 
-						}
+					case('p'):
+						//build from pack
+						setup_state = 1;
 						break;
-					}
 					default:
-						break;
+						std::wcout << "No such option is available. Options include i or p" << '\n';
+						continue;
 					}
 				}
-				
+
+				switch (setup_state) {
+					//case 0: create a table from a collection of standalone images
+				case 0: {
+					std::wcout << "Enter full filepath from root to 24-bitmap containing folder: ";
+					if (DEBUG_MODE == 1) {
+						crunchy_path = L"C:\\Users\\JamesH\\Pictures\\Screenshots\\minecraft_test_icons";
+					}
+					else {
+						std::getline(std::wcin, crunchy_path);
+					}
+					/*
+					Pack filename processing and exclusion would have been done by the java crunchypack setup.
+					Without that, file finding and verification must be done here.
+
+					Windows specific code for testing if folder exists and enumerating the files of a folder. 
+					*/
+					WIN32_FIND_DATA w32_data_finding;
+					LARGE_INTEGER filesize;
+					TCHAR szDir[MAX_PATH];
+					size_t length_of_arg;
+					HANDLE hFind = INVALID_HANDLE_VALUE;
+					DWORD dwError = 0;
+
+					STRSAFE_LPCWSTR crunchy_to_lpwstr = crunchy_path.c_str();
+
+					StringCchCopy(szDir, MAX_PATH, crunchy_to_lpwstr);
+					StringCchCat(szDir, MAX_PATH, TEXT("\\*"));
+
+
+					hFind = FindFirstFile(szDir, &w32_data_finding);
+					//failed to find the provided folder. abort current enumeration
+					if (INVALID_HANDLE_VALUE == hFind)
+					{
+						std::wcout << "The program could not find that folder.\n";
+						continue;
+					}
+					else {
+						standalone_folder = crunchy_path;
+					}
+
+					//enumerate all .bmp extended files in a valid folder. 
+					do
+					{
+						if (w32_data_finding.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+						{
+
+						}
+						else
+						{
+							//filters files by selecting only those with a bitmap extension. 
+							filesize.LowPart = w32_data_finding.nFileSizeLow;
+							filesize.HighPart = w32_data_finding.nFileSizeHigh;
+							std::wstring cmp = w32_data_finding.cFileName;
+							if (cmp.find(L".bmp") == std::wstring::npos) {
+								//notified of fail-to-import due to matching
+								std::wcout << " File " << w32_data_finding.cFileName << " is not a bitmap. Excluded from import." << '\n';
+							}
+							else {
+								direct_name_buffer.push_back(w32_data_finding.cFileName);
+								_tprintf(TEXT("  %s   %ld bytes\n"), w32_data_finding.cFileName, filesize.QuadPart);
+							}
+						}
+					} while (FindNextFile(hFind, &w32_data_finding) != 0);
+
+					FindClose(hFind);
+					quit = true;
+					break;
+				}
+				//case 1: use the files already listed/verified from a prebuilt crunchypack 
+				case 1: {
+					std::wcout << "Enter full path to crunchypack setup file, including name and extension: ";
+					if (DEBUG_MODE == 1) {
+						crunchy_path = L"C:\\Users\\JamesH\\Documents\\NetBeansProjects\\CleanStencilUI\\cpack_fpath_condense_spack.txt";
+					}
+					else {
+						std::getline(std::wcin, crunchy_path);
+					}
+					std::wifstream datafile(crunchy_path, std::ios::in);
+					if (!datafile.is_open()) {
+						std::wcout << "The program could not find the crunchypack setup file.\nRemember to include the full file name and .txt extension.";
+						continue;
+					}
+					else {
+						buffer << datafile.rdbuf();
+						source_data = buffer.str();
+						quit = true;
+					}
+					break;
+				}
+				default:
+					break;
+				}
 
 				if (quit = true) {
-					//one of the above build porcesses compleated successfully. 
 					if (setup_state == 0) {
-						//in standalone, user needs to choose a package name. 
 						std::wcout << "Choose a name for the package: ";
 						if (DEBUG_MODE == 1) {
 							standalone_name = L"Debug";
@@ -230,16 +223,17 @@ int main()
 			std::vector<std::wstring> group_names;
 			std::vector<std::vector<std::wstring>> file_names;
 
+			//processes the data in the vector buffers depending on standalone(0) or prebuilt(1) import state
 			switch (setup_state) {
 			case 0: {
-				//if the ending \ in the file path was not provided, append it. 
+				//if the escaped \ at the end of the file path was not supplied, append it
 				if (standalone_folder[standalone_folder.size() - 1] != '\\') {
 					standalone_folder += L"\\";
 				}
 				master_filepath = standalone_folder;
 				chosen_packname = standalone_name;
 				group_names.push_back(L"none");
-				//real-alias-group
+				//real file name -alias name -group assignment (unassigned by default in this mode. all images in same group)
 				for (int i = 0; i < direct_name_buffer.size(); ++i) {
 					std::vector<std::wstring> standalone_file_names;
 					standalone_file_names.push_back(direct_name_buffer[i]);
@@ -250,7 +244,7 @@ int main()
 				break;
 			}
 			case 1:
-				//same data as above but the data comes from crunchypack file
+				//prebuilt pack is processed 
 				master_tokenize = extract_fpath_from_file(source_data);
 				master_filepath = master_tokenize[0][0];
 				chosen_packname = master_tokenize[1][0];
@@ -260,6 +254,8 @@ int main()
 			}
 
 
+
+			//debug print of the imported files
 			if (DEBUG_MODE == 1) {
 				std::wcout << "SRC: " << source_data << "\n\n";
 				std::wcout << "Groups: " << '\n';
@@ -279,14 +275,13 @@ int main()
 				std::wcout << "Processed the data file. Building workload." << std::endl;
 			}
 
-			collect_minimap& cmapref = collect_minimap(); //the one and only minimap collection manager object 
 
+			//rough estimate of workload completion
 			const int perfile_progress = (100 / file_names.size()) / 3;
 			int progress = 0;
 
-
+			//for each file, assemble the filename from the master filepath and each image vector name
 			for (int i = 0; i < file_names.size(); ++i) {
-				//stage one processing of image files
 				std::wstring wstr_to_file = master_filepath + file_names[i][0];
 				LPCWSTR path_to_file = wstr_to_file.c_str();
 				int group_property = std::stoi(file_names[i][2]);
@@ -295,43 +290,133 @@ int main()
 				if (DEBUG_MODE == 1) {
 					std::wcout << "\n\n" << "Processing : " << file_names[i][0] << '\n';
 				}
+				//pass each image path to the hash-against-self function
 				LoadInitialImage(path_to_file, cmapref, group_property, obj_alias);
 				progress += perfile_progress;
 				std::wcout << "Progress: " << progress << "%" << '\n';
 			}
 
-			std::vector<std::vector<int>> gcollide_handling_firstocc; //arrays for holding multiple-colisson values, first colission
-			std::vector<std::vector<int>> gcollide_handling_secondocc; //second colission
-			std::unordered_map<long int, int> tripart_hashmap = delete_global_duplicates(cmapref, gcollide_handling_firstocc, gcollide_handling_secondocc);
-			for (std::unordered_map<long int, int>::const_iterator iter = tripart_hashmap.begin(); iter != tripart_hashmap.end(); ++iter) {
-				//produce the hashmap output. 
-				std::cout << "Value " << std::to_string((long int)iter->first) << " " << std::to_string(iter->second) << '\n';
-			}
-			colission_removal_in_source(gcollide_handling_firstocc, gcollide_handling_secondocc, cmapref);
+			std::vector<std::vector<int>> gcollide_handling_firstocc; //arrays for holding multiple-colission values, first colission event
+			std::vector<std::vector<int>> gcollide_handling_secondocc; //second colission events
 
+			//hash-against-collection function
+			//fills the collision vectors with the object ID and pixel number of collisions 
+			std::unordered_map<long int, int> tripart_hashmap = delete_global_duplicates(cmapref, gcollide_handling_firstocc, gcollide_handling_secondocc);
+
+			//performs the removal of marked pixels and resizing of minimap buffers to the unique collection size
+			colission_removal_in_source(gcollide_handling_firstocc, gcollide_handling_secondocc, cmapref);
 
 			//clear bad object names from source. 
 			std::vector<std::vector<std::wstring>> images_with_unique;
 
+
+
+			/*
+			Table feature disabled. Not supported for building stencilpacks. 
+			*/
 			//Builds [Color, like 125 red, matches....] ObjectID1, ObjectID2...
-			//this is the table that will be sent
+			//this is the vectors from which the table is built
 			//Vector of 256 empty vectors, one per color. 
-			std::vector<std::vector<int>> redbucket(256, std::vector<int>(0)); //the BGR vectors
-			std::vector<std::vector<int>> greenbucket(256, std::vector<int>(0));
-			std::vector<std::vector<int>> bluebucket(256, std::vector<int>(0));
+			std::vector<std::vector<int>> redbucket(256); //the BGR vectors
+			std::vector<std::vector<int>> greenbucket(256);
+			std::vector<std::vector<int>> bluebucket(256);
+
+			//O(1) time access for an image...directly. 
+			//load red, with img ID: EXAMPLE 112: 7, 9, 5
+			/*
+			for (int i = 0; i < cmapref.vec_size(); ++i) {
+				if (cmapref.access_size_source(i) != 0) {
+					//if the object has nothing in its buffer (entirely duplicate) it should be purged from the images table along with its name.
+					//this is a useless object for identification
+					images_with_unique.push_back(file_names[i]);
+
+					int* csource = cmapref.access_minimap_source(i);
+
+					for (int r = 0; r < cmapref.access_size_source(i); r += 4) {
+						int bbucket = csource[r];
+						int gbucket = csource[r + 1];
+						int rbucket = csource[r + 2];
+
+						if (bbucket == 48) {
+							std::cout << "SS " << i << " " << bbucket << " " << gbucket << " " << rbucket << '\n';
+						}
+
+						if (gbucket == 48) {
+							std::cout << "GB " << i << " " << bbucket << " " << gbucket << " " << rbucket << '\n';
+						}
 
 
+						if (bluebucket[(int)csource[r]].empty() == true) {
+							bluebucket[(int)csource[r]].push_back(i);
+						}
+						else {
+							if (bluebucket[(int)csource[r]].back() == i) {
+								//Do nothing, don't double-add. 
+							}
+							else {
+								int b = 4;
+								bluebucket[(int)csource[r]].push_back(i);
+							}
+						}
 
 
-        }
-    }
-    else
-    {
-        wprintf(L"A Fatal Error: GetModuleHandle failed : has occured.\n");
-        nRetCode = 1;
-    }
+						if (greenbucket[(int)csource[r + 1]].empty() == true) {
+							greenbucket[(int)csource[r + 1]].push_back(i);
+						}
+						else {
+							if (greenbucket[(int)csource[r + 1]].back() == i) {
+								//Do nothing, don't double-add. 
+							}
+							else {
+								int b = 4;
+								greenbucket[(int)csource[r + 1]].push_back(i);
+							}
 
-    return nRetCode;
+						}
+
+
+						if (redbucket[(int)csource[r + 2]].empty() == true) {
+							redbucket[(int)csource[r + 2]].push_back(i); //fill an empty bucket
+						}
+						else {
+							if (redbucket[(int)csource[r + 2]].back() == i) {
+								//Avoids 122: 0, 0, 0. if P has 3 unique pixels all starting with 122. Only need to look up 122 once. 
+							}
+							else {
+								int b = 4;
+								redbucket[(int)csource[r + 2]].push_back(i); //add to a full bucket
+							}
+						}
+
+					}
+				}
+				else {
+					//Object has no unique pixels. Exclude from collection. 
+				}
+			}
+			*/
+			
+			//int write_status = pkg_table_to_file(chosen_packname, redbucket, greenbucket, bluebucket, group_names, images_with_unique); //writes the composite table to file. 
+			
+			
+			
+			
+			//Write the map to the output file: only map output supported at this time (1.0 build) for stencilpack building. 
+			int write_map_status = pkg_map_to_file(tripart_hashmap, chosen_packname, group_names, images_with_unique);
+			if (write_map_status == 0) {
+				std::wcout << "Crunchypack compression table file successfully created!" << '\n';
+			}
+
+		}
+	}
+	else
+	{
+		// Module failed to initialize. 
+		wprintf(L"Fatal Error: GetModuleHandle failed\n");
+		nRetCode = 1;
+	}
+
+	return nRetCode;
 }
 
 
@@ -344,12 +429,14 @@ This helps keep the running memory footprint of the object low (no larger than t
 */
 void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int object_group, std::wstring object_name) {
 
+	//load the image from source into memory
 	HBITMAP hbmScreen = NULL;
 	BITMAP bmpScreen;
 	HDC hdcWindow;
 	hbmScreen = (HBITMAP)LoadImage(NULL, filename, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
 	if (!hbmScreen)
 	{
+		//if the system cannot allocate enough ram, trigger a hard abort. the operation can never be successfully compleated. 
 		MessageBox(NULL, L"Failed to acquire bitmap. Program aborted.", L"Error 0x02", MB_OK);
 		std::abort();
 	}
@@ -360,8 +447,7 @@ void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int
 
 	GetObject(hbmScreen, sizeof(BITMAP), &bmpScreen); //get bitmap object dimensions for buffer calculations
 	DWORD dwBmpSize = bmpScreen.bmWidth * 4 * bmpScreen.bmHeight;
-	HANDLE hDIB = GlobalAlloc(GHND, dwBmpSize);
-	BYTE* lpbitmap = (BYTE *)GlobalLock(hDIB);
+	BYTE* lpbitmap = new BYTE[dwBmpSize];
 	if (lpbitmap == NULL) {
 		//abort the program. Failure to acquire memory in an unrecoverable error. 
 		MessageBox(NULL, L"Failed to allocate bitmap memory. Program aborted.", L"Error 0x03", MB_OK);
@@ -376,14 +462,13 @@ void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int
 
 
 
-
 	//hashing system, image-with-self
 	std::unordered_map<int, BOOL> Rreduction;
 	std::unordered_map<int, BOOL> Greduction;
 	std::unordered_map<int, BOOL> Breduction;
 	std::vector<int> uniqueplx;
 	int threepoint = 0;
-	for (int i = 0; i < (dwBmpSize / 4); i += 4) {
+	for (int i = 0; i < (dwBmpSize); i += 4) {
 		//iterates through every pixel and finds all the unique pixels within the image
 		threepoint = 0;
 		//find redunique
@@ -433,29 +518,23 @@ void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int
 
 
 	std::vector<int>::const_iterator inter_vec;
-	if (DEBUG_MODE == 1) {
-		std::wcout << "Unique pixel within large array: " << '\n';
-		for (inter_vec = uniqueplx.begin(); inter_vec != uniqueplx.end(); ++inter_vec) {
-			std::wcout << (int)lpbitmap[(*inter_vec)] << " " << (int)lpbitmap[(*inter_vec + 1)] << " " << (int)lpbitmap[(*inter_vec + 2)] << " " << (int)lpbitmap[(*inter_vec + 3)];
-			std::wcout << '\n';
-		}
-	}
 
 	//reduce the bitmap buffer to contain only the minimum uniques and return it. 
 	//reduce lpbitmap to unique-only; 
-	//newalloc something 
 
 	DWORD compact_bmap_size = 4 * uniqueplx.size();
 	//HANDLE h_compact_mem = GlobalAlloc(GHND, compact_bmap_size);
 	//BYTE* compact_bmap = (BYTE *)GlobalLock(h_compact_mem);
-	BYTE* compact_bmap = new BYTE[compact_bmap_size];
+	int* compact_bmap = new int[compact_bmap_size];
 	if (compact_bmap == NULL) {
+		//could not allocate enough memory for the operation. hard abort: cannot complete operation
 		MessageBox(NULL, L"System could not allocate sufficient memory. Program aborted.", L"Error 0x03", MB_OK);
 		std::abort();
 	}
 	int tk = 0;
-	for (inter_vec = uniqueplx.begin(); inter_vec != uniqueplx.end(); ++inter_vec) { //uniquepxl is the locations of all the 4-part unique structures
-																					 //copy the unique values into the new buffer pixel by pixel 
+	for (inter_vec = uniqueplx.begin(); inter_vec != uniqueplx.end(); ++inter_vec) { 
+		//uniquepxl is the locations of all the 4-part unique structures
+		//copy the unique values into the new buffer pixel by pixel 
 		compact_bmap[tk] = (int)lpbitmap[(*inter_vec)];
 		compact_bmap[tk + 1] = (int)lpbitmap[(*inter_vec + 1)];
 		compact_bmap[tk + 2] = (int)lpbitmap[(*inter_vec + 2)];
@@ -463,16 +542,25 @@ void LoadInitialImage(LPCWSTR filename, collect_minimap& minimap_collection, int
 		tk += 4;
 	}
 
+	//print the entire contents of minimap buffer. 
 	if (DEBUG_MODE == 1) {
-		std::wcout << "Minimaps compact pixels: " << '\n';
+		std::wcout << "Minimaps compact pixels CB: " << '\n';
 		for (int t = 0; t < compact_bmap_size; t += 4) {
-			std::cout << (int)compact_bmap[t] << " " << (int)compact_bmap[t + 1] << " " << (int)compact_bmap[t + 2] << " " << (int)compact_bmap[t + 3];
+			std::cout << compact_bmap[t] << " " << compact_bmap[t + 1] << " " << compact_bmap[t + 2] << " " << compact_bmap[t + 3];
+			if (compact_bmap[t] == 47 && compact_bmap[t + 1] == 47 && compact_bmap[t + 2] == 47) {
+				std::cout << "					MGMPOP";
+			}
+			if (compact_bmap[t] == 17 && compact_bmap[t + 1] == 48 && compact_bmap[t + 2] == 45) {
+				std::cout << "					CPOP";
+			}
 			std::cout << '\n';
 		}
 	}
 
-	minimap_collection.add_map(compact_bmap, compact_bmap_size, object_group, object_name); //add the image-unique bmap array to the collection
-	GlobalFree(hDIB); //release the memory associated with the original large bitmap, no longer needed. 
+	//add the image-unique bmap array to the collection 
+	minimap_collection.add_map(compact_bmap, compact_bmap_size, object_group, object_name); 
+																							
+	delete[] lpbitmap;
 }
 
 
@@ -581,34 +669,33 @@ std::vector<std::vector<std::wstring>> extract_filedata_from_file(const std::vec
 
 /*
 Builds a map of all unique tripart color objects using a rolling hash.
-Backtracks and marks single and multi collission points for deletion from the image minimap buffers.  
+Backtracks and marks single and multi collision points for deletion from the image minimap buffers.  
 */
 std::unordered_map<long int, int> delete_global_duplicates(collect_minimap& cmapref, std::vector<std::vector<int>>& global_collide_handling_firstocc, std::vector<std::vector<int>>& global_collide_handling_secondocc) {
-	/*FUNCTION PURPOSE: Loads the vectors of colissions that need to be cleared by colission_removal_in_source
-	*/
-
-	//handle global duplicates by clearing from the participant object source arrays before the final RBG buckets are constructed 
+	//handle global duplicates on their first collision by clearing from both the previous and current image 
 	global_collide_handling_firstocc.resize(cmapref.vec_size()); //has as many vectors as images
 																 //0: 4, 32 
-																 //FORMAT: Bucket: object, Pixel+1 = pixel collide
 																 //BUCKET collides with OBJECT at OBJECT_PIXEK(Y): Remove Y from both bucket and object
 
+	//since the map is already marked at this value (known to have had previous colissions) only remove this pixel from the current object
 	global_collide_handling_secondocc.resize(cmapref.vec_size());
 	//FORMAT: Bucket: Pixel
 	//PIXEL is a well-known colission point. Remove PIXEL from BUCKET
 
 
-	std::unordered_map<long int, int> tripart_obj; //each TRIPART pixel at this scale is uniquely owned. 
-	const int hash_badunique = cmapref.vec_size() + 1; //a value larger than the largest item ID that could exist used as a marker
+
+	std::unordered_map<long int, int> tripart_obj;
+	const int hash_badunique = cmapref.vec_size() + 1; //a value larger than the largest item ID
 	for (int i = 0; i < cmapref.vec_size(); ++i) {
 		//request: the 4-part elements, need access to minimap source buffer
-		BYTE* dstart = cmapref.access_minimap_source(i);
+		int* dstart = cmapref.access_minimap_source(i);
 		int bufsize = cmapref.access_size_source(i); //number of pixels in object minimap
 		for (int y = 0; y < bufsize; y += 4) {
-			//rolling hash each BGR pixel, 1000000007 is a well known prime that eliminates collissions for this range
+			//rolling hash each BGR pixel
 			long int h1 = (dstart[y] * 257 + dstart[y + 1]) % 1000000007; //b-g	
 			long int h2 = (h1 * 257 + dstart[y + 2]) % 1000000007; //bg-r	
 			long int h3 = (h2 * 257 + dstart[y]) % 1000000007; //bgr-b		
+
 
 			if (tripart_obj.find(h3) == tripart_obj.end()) {
 				//object is currently unique
@@ -621,38 +708,32 @@ std::unordered_map<long int, int> delete_global_duplicates(collect_minimap& cmap
 				//the pixel was previously unique (objectID in range, < hash_badunique) but just got hit again
 				int remove_previous = tripart_obj[h3]; //the object at that hash was originally unique must have its source array cleared
 													   //need to find parent value as well. Must retrieve by searching
-				for (std::unordered_map<long int, int>::iterator iter = tripart_obj.begin(); iter != tripart_obj.end(); ++iter) {
-					if (iter->second == remove_previous) {
-						iter->second = hash_badunique;
-					}
-					else {
 
-					}
-				}
-				//index is the parent, i is the child, and y is the pixel in the child
-				//global[previously_owned_by] {collides with, at}
+													   //index is the parent, i is the child, and y is the pixel in the child
+													   //global[previously_owned_by] {collides with, at}
 				global_collide_handling_firstocc[remove_previous].push_back(i); //push back objectID
-				global_collide_handling_firstocc[remove_previous].push_back(y); //push back pixel
+				global_collide_handling_firstocc[remove_previous].push_back(y / 4); //push back pixel
 				tripart_obj[h3] = hash_badunique; //mark this pixel as a multi-hit point now so on second clear we ONLY clear from child. 
 												  //Don't double-delete
-				std::cout << "WARNING: object first CL" << '\n';
 				if (DEBUG_MODE == 1) {
-					std::cout << "First order colission: Object " << remove_previous << " with Object " << i << '\n';
+					std::cout << "WARNING: object first CL" << '\n';
+					std::cout << "First order colission: Object " << remove_previous << " with Object " << i << "(" << dstart[y] << " " << dstart[y + 1] << " " << dstart[y + 2] << ")" << '\n';
 				}
 			}
-			else {
+			else if (tripart_obj[h3] == hash_badunique) {
 				//tripart is ea known multi-hit value
 				//do a simple clear since at this point, the parent has been cleared already
-				global_collide_handling_secondocc[i].push_back(y); //ObjectID: Pixel
-				std::cout << "WARNING: object bad CL" << '\n';
+				global_collide_handling_secondocc[i].push_back(y / 4); //ObjectID: Pixel
 				if (DEBUG_MODE == 1) {
-					std::cout << "Second order colission: Object " << i << '\n';
+					std::cout << "WARNING: object bad CL" << '\n';
+					std::cout << "Second order colission: Object " << i << "(" << dstart[y] << " " << dstart[y + 1] << " " << dstart[y + 2] << ")" << '\n';
 				}
 			}
 		}
 	}
 
-	//loads collission key values into deque
+	//marks entries with a multi-colission value to be removed from map to save space on the output
+	//do not delete from the map while parsing it (resizing isues), temporarily store values for later
 	std::deque<long int> clear_keys;
 	for (std::unordered_map<long int, int>::iterator iter = tripart_obj.begin(); iter != tripart_obj.end(); ++iter) {
 		if (iter->second == cmapref.vec_size() + 1) {
@@ -663,7 +744,7 @@ std::unordered_map<long int, int> delete_global_duplicates(collect_minimap& cmap
 		}
 	}
 
-	//clear the colliding values from the global map. 
+	//clears bad entries from the map
 	std::unordered_map<long int, int>::iterator map_iter;
 	for (std::deque<long int>::const_iterator iter = clear_keys.begin(); iter != clear_keys.end(); ++iter) {
 		map_iter = tripart_obj.find(*iter);
@@ -676,15 +757,14 @@ std::unordered_map<long int, int> delete_global_duplicates(collect_minimap& cmap
 
 
 /*
-Backtracks and deletes collission points out of participating minimap buffers.
+Backtracks and deletes collision points out of participating minimap buffers.
 Reduces minimaps down to a collection of triparts that are unique among all all objects in the collection after execution.
 */
 void colission_removal_in_source(std::vector<std::vector<int>>& global_collide_handling_firstocc, std::vector<std::vector<int>>& global_collide_handling_secondocc, collect_minimap& cmapref) {
 	//handles the global colission arrays and removes the conflict pixels from the object source. 
-	if (DEBUG_MODE == 1) {
-		std::cout << '\n' << "Collide handling: ";
-	}
+	std::cout << '\n' << "Collide handling: ";
 	std::vector<int>::const_iterator iter_source;
+	//iterates through the parent (first owned unique) and child (tried to own unique) vectors and marks the collision pixels
 	for (int j = 0; j < global_collide_handling_firstocc.size(); ++j) {
 		if (global_collide_handling_firstocc[j].empty()) {
 			//This object experieneced no colissions. Its source pixels are all unique. 
@@ -692,17 +772,24 @@ void colission_removal_in_source(std::vector<std::vector<int>>& global_collide_h
 		else {
 			for (iter_source = global_collide_handling_firstocc[j].begin(); iter_source != global_collide_handling_firstocc[j].end(); ++iter_source) {
 				//each one of these represents a colission
-				//first vector guarenteed to only ever have one child per tripart, then it'll be marked bad_hash and put into second vector
+				//first vector guarenteed to only every have one child per tripart, then it'll be marked bad_hash and put into second vector
 				//[parent] child_obj, child_pixel
 				int parentobj = j;
 				int childobj = (*iter_source); //the vector in j
 				++iter_source;
 				int childpixel = (*iter_source);
-				std::cout << j << " " << childobj << " " << childpixel << '\n'; //
+				if (DEBUG_MODE == 1) {
+					std::cout << std::to_string(j) << " " << std::to_string(childobj) << " " << std::to_string(childpixel) << '\n';
+				}
+				else {
 
-				//remove from child, returning rbg, then BACKTRACK to delete from parent. 
+				}
+
+
+				//mark from child, returning rbg, then BACKTRACK to delete from parent. 
 				//access the bmap source of child, navigate to the pixel, copy the RBG and then call delete on the pixel. 
-				BYTE* childsource = cmapref.access_minimap_source(childobj);
+				//need to handle the optential source of minimap = nullpointer case. 
+				int* childsource = cmapref.access_minimap_source(childobj);
 				int oset = 0;
 				for (int i = 0; i < childpixel; ++i) {
 					oset += 4;
@@ -710,32 +797,183 @@ void colission_removal_in_source(std::vector<std::vector<int>>& global_collide_h
 
 				int redmatch = childsource[oset];
 				int greenmatch = childsource[oset + 1];
-				int bluematch = childsource[oset + 2];
-				cmapref.remove_ambiguous_pixel(childobj, childpixel); //remove child pixel from child. 
+				int bluematch = childsource[oset + 2]; 
+				cmapref.mark_ambiguous_pixel(childobj, childpixel);
 
-				//Now to remove the parent, need to find the RBG of the parent using the colormatch temps above. 
-				BYTE* parentsource = cmapref.access_minimap_source(parentobj);
-				//first, we need to find where the pixel is...
+
+				//Now mark the parent, need to find the RBG of the parent using the colornatch temps above. 
+				int* parentsource = cmapref.access_minimap_source(parentobj);
 				int parent_pixel_start = 0;
 				for (int i = 0; i < cmapref.access_size_source(parentobj); i += 4) {
-					//find the rbg point and return the i, O(n) but very rarely executed: only once per first occurance collission. 
+					//find the rbg point and return the i, O(n) but very rarely executed 
 					if (parentsource[i] == redmatch  &&  parentsource[i + 1] == greenmatch   &&   parentsource[i + 2] == bluematch) {
 						parent_pixel_start = i;
 						break;
 					}
 					else {
-						//no match. continue on. 
+						//Should never occure. should always be match. 
 					}
-				}
-				cmapref.remove_ambiguous_pixel(parentobj, parent_pixel_start); //remove the pixel from the parent as well. 
+				} 
+				cmapref.mark_ambiguous_pixel(parentobj, parent_pixel_start / 4);
 			}
 		}
 	}
 
-	//iterates through parent array deleting [objectID] pixel. 
+	//iterates through child array only (parent already cleared) marking [objectID] pixel. 
 	for (int i = 0; i < global_collide_handling_secondocc.size(); ++i) {
 		for (int m = 0; m < global_collide_handling_secondocc[i].size(); ++m) {
-			cmapref.remove_ambiguous_pixel(i, m); //calls a direct delete on second-colission BYTE arrays. Parent has already been handled in first-colission state. 
+			cmapref.mark_ambiguous_pixel(i, m);
 		}
 	}
+
+
+	//ALL MARKINGS COMPLETE. 
+	cmapref.compact_maps();
+}
+
+
+/*
+Prints the file with hashmap style output (Feature compatable with stencilbuilder as of current build.)
+*/
+int pkg_map_to_file(std::unordered_map<long int, int>& tripart_map,
+	const std::wstring& chosen_packname,
+	const std::vector<std::wstring>& group_names,
+	const std::vector<std::vector<std::wstring>>& file_names) {
+	//add functionality to name the pack
+	//package the master tables to the binary data file
+
+	std::wstring data_ext = L"Crunchypack_map_";
+	std::wstring full_name = data_ext + chosen_packname + L".txt";
+
+	std::wstring alt_name;
+
+	//force the user to select a unique name for the file
+	while (true) {
+		std::ifstream outloc(full_name, std::ios::in);
+		if (outloc.is_open()) {
+			outloc.close();
+			std::wcout << "A file already exists using the name you proposed.\nAlternate name: ";
+			std::getline(std::wcin, alt_name);
+			full_name = data_ext + alt_name + L".txt";
+		}
+		else {
+			break;
+		}
+	}
+
+	//output the file to local directory
+	std::wofstream data_out(full_name, std::ios::out);
+
+	//Write Groupnames in a single long line
+	//write imagenames in a single long line
+	for (int i = 0; i < group_names.size(); ++i) {
+		data_out << group_names[i] << ",";
+	}
+	data_out << '\n';
+	for (int i = 0; i < file_names.size(); ++i) {
+		for (int k = 0; k < file_names[i].size(); ++k) {
+			data_out << file_names[i][k] << ",";
+		}
+		data_out << '\t';
+	}
+	data_out << '\n';
+
+
+	//O(1) time for direct matches to the tripart rolling hash
+	for (std::unordered_map<long int, int>::const_iterator iter = tripart_map.begin(); iter != tripart_map.end(); ++iter) {
+		data_out << std::to_wstring(iter->first) << " " << std::to_wstring(iter->second) << '\n';
+	}
+
+	data_out.close();
+	return 0;
+}
+
+
+
+/*
+Prints the file with table style output. 
+NOT SUPPORTED for stencilpack builds as of 1.0. 
+*/
+int pkg_table_to_file(const std::wstring& chosen_packname,
+	const std::vector<std::vector<int>>& redbucket,
+	const std::vector<std::vector<int>>& greenbucket,
+	const std::vector<std::vector<int>>& bluebucket,
+	const std::vector<std::wstring>& group_names,
+	const std::vector<std::vector<std::wstring>>& file_names) {
+	std::wstring data_ext = L"Crunchypack_table_";
+	std::wstring full_name = data_ext + chosen_packname + L".txt";
+
+	//test if a similarly named file exists already. If it does, force manual name selection. 
+
+	std::wstring alt_name;
+
+	while (true) {
+		std::ifstream outloc(full_name, std::ios::in);
+		if (outloc.is_open()) {
+			outloc.close();
+			std::wcout << "A file already exists using the name you proposed.\nAlternate name: ";
+			std::getline(std::wcin, alt_name);
+			full_name = data_ext + alt_name + L".txt";
+		}
+		else {
+			break;
+		}
+	}
+
+
+	std::wofstream data_out(full_name, std::ios::out);
+
+	//Write Groupnames in a single long line
+	//write imagenames in a single long line
+	for (int i = 0; i < group_names.size(); ++i) {
+		data_out << group_names[i] << ",";
+	}
+	data_out << '\n';
+	for (int i = 0; i < file_names.size(); ++i) {
+		for (int k = 0; k < file_names[i].size(); ++k) {
+			data_out << file_names[i][k] << ",";
+		}
+		data_out << '\t';
+	}
+	data_out << '\n';
+
+
+	//O(1) time access for an image...directly. 
+	//load red, with img ID: EXAMPLE 112: 7, 9, 5
+	for (int k = 0; k < 256; ++k) {
+		data_out << k << " ";
+		if (bluebucket[k].size() > 0) {
+			for (int m = 0; m < bluebucket[k].size(); ++m) {
+				data_out << bluebucket[k][m] << ",";
+			}
+			data_out << "\t";
+		}
+		else {
+			data_out << "\t";
+		}
+		if (greenbucket[k].size() > 0) {
+			for (int m = 0; m < greenbucket[k].size(); ++m) {
+				data_out << greenbucket[k][m] << ",";
+			}
+			data_out << "\t";
+		}
+		else {
+			data_out << "\t";
+		}
+		if (redbucket[k].size() > 0) {
+			for (int m = 0; m < redbucket[k].size(); ++m) {
+				data_out << redbucket[k][m] << ",";
+			}
+			data_out << "\t";
+		}
+		else {
+			data_out << "\t";
+		}
+		data_out << "\n";
+	}
+	data_out.close();
+
+	//upon successful close, delete the temporary package file from java--------------------------------------------------
+
+	return 0;
 }
