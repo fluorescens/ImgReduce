@@ -14,4 +14,4 @@ I have a collection of images, redcup.bmp, redtruck.bmp, greentree.bmp, and blue
  Visual Studio 2015 Community edition, available for free from Microsoft, is the IDE of choice. Follow the standard Microsoft installation instructions making sure Microsoft foundation classes are included in the install. It contains the Win32 API libraries, Win32.h, which will be required to build and run the full project. 
  
 # Change Requests:
- Changes should be submitted as plaintext source code with file name and line numbers to project lead: james@leppek.us
+ Changes should be submitted as plaintext source code with file name and line numbers to project lead: jamesl@leppek.us
