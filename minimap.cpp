@@ -41,6 +41,7 @@ void minimap::compact_map()
 		int external_ctr = 0;
 		new_source = new int[(indiv_buffer_size - dead_blocks * 4)];
 		if (new_source == nullptr) {
+			//System doesn't have enough memory to fit the current image + all maps. Kill program after OK. 
 			int msgboxID = MessageBox(
 				NULL,
 				(LPCWSTR)L"The system could not allocate enough memory for a critical operation. Program Aborted.",
