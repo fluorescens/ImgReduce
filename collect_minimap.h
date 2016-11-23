@@ -26,6 +26,9 @@ public:
 	std::string collect_minimap::data_string();
 	~collect_minimap();
 private:
+	/*
+	Vector of all current minimap objects representing an image collection & a provided iterator. 
+	*/
 	std::vector<minimap*> index_minimaps;
 	std::vector<minimap* >::const_iterator iter_cminmaps;
 	int assign_id;
